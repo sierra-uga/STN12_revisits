@@ -141,7 +141,7 @@ ggsave("graphics/part_associated_barplot.pdf", width = 8, height = 6, dpi = 150)
 ######################
 
 total <- rbind(data_top_part, data_top_free)
-# make combined FAKE plot to grab legend from and to put in the comine plot :^)
+# make combined FAKE plot to grab legend from and to put in the combine plot :^)
 legend_plot <- ggplot(total, aes(x = Station, y = Abundance, fill = Order)) +
   geom_bar(stat = "identity", position="fill", width=2) + theme_classic() +
   # geom_col(position = "dodge") + # changes to multiple bars
@@ -149,8 +149,10 @@ legend_plot <- ggplot(total, aes(x = Station, y = Abundance, fill = Order)) +
   scale_fill_manual(values = myColors) +
   guides(fill = guide_legend(override.aes = list(color = "black", size = 1))) # adds black outline around legend
 
+# get legend from the fake combined plot
 legend_combined <- get_legend(legend_plot)
 
+# combines the two graphs together
 ps_combined <- ggarrange(
   barplot_free, barplot_part, labels = NULL,
   common.legend = TRUE, legend = "right", legend.grob = legend_combined
