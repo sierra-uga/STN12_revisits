@@ -1,0 +1,134 @@
+## LIBRARY LOADING ##
+library("ggplot2") # used for plotting
+library("tidyr") # used for data manipulation + organization
+library("dplyr") # used for data manipulation + organization
+library("phyloseq") # used for phylogenetic analysis (data compiling, ordination)
+library("qiime2R") # used to transfer from QIIME artifacts into R
+library("vegan") # used for NMS ordination
+
+## IMPORTING DATA ##
+PHYLO <- qza_to_phyloseq(features="table.qza") # importing feature table (from QIIME2 artifact (.qza)) into phyloseq object
+
+metatable <- read.delim("artemis-eDNA-metadata-final.tsv", sep="\t", header=TRUE)
+row.names(metatable) <- metatable[["X.SampleID"]] # fixing row names for metadata, selecting all variables
+metatable[metatable == "Getz_Ice_shelf"] <- "Getz_Ice_Shelf" # fixing variable names for inconsistency in capitalization
+metatable[metatable == "Off_Ice_shelf"] <- "Off_Ice_Shelf" # fixing variable names for inconsistency in capitalization
+META <- sample_data(metatable) # setting metadata for phyloseq object
+
+taxonomy <- read.delim("taxonomy.tsv", sep="\t", header=TRUE) # import QIIME2 artifact
+names(taxonomy) <- c("row", "tax", "Confidence") # rename columns
+row.names(taxonomy) <- taxonomy[[1]] # make tax ID row names
+taxonomy <- taxonomy[,(-1)] # remove duplicate column
+
+# SILVA (the trained classifier) taxonomy is in one column, separate to be able to work with different taxonomic levels:
+taxonomy <-  separate(taxonomy, tax, c("D0","D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "D14"), sep = ";", fill = "right")
+taxonomy <- taxonomy[,c(1:8)] # Keep the first 8 taxonomic levels (no assignments after that)
+taxonomy$D3 <- as.character(taxonomy$D3) # make character
+taxonomy$D3 <- gsub('D_.__', '', taxonomy$D3) # take the weird D_3__ out...
+taxmat <- as.matrix(taxonomy) 
+TAX <- tax_table(taxmat) # covert taxonomy table to phyloseq object
+
+TREE <- qza_to_phyloseq(tree="rooted-tree.qza") # import rooted tree (from QIIME2 artifact)
+
+# merge all 
+ps <- merge_phyloseq(PHYLO, TAX, META, TREE)
+ps # check to see if phyloseq object is correct
+
+## DATA MANIPULATION ##
+colnames(tax_table(ps)) <- c("Kingdom", "Phylum", "Class", 
+                             "Order", "Family", "Genus", "Species", "NA") # change column ranks
+
+ps_sub <- ps %>%
+  subset_samples(Sample.Control == "True.Sample") %>% # filter by non-blank samples 
+  prune_taxa(taxa_sums(.) > 0, .) # remove any taxa that are not present (taxa_sums = 0)
+
+# filter taxa by removing archaea, mitochondria, etc.
+free_phyloseq <- ps_sub %>%
+  subset_taxa(
+    Kingdom == "D_0__Bacteria" &
+      Family  != "D_4__Mitochondria" &
+      Class   != "Chloroplast" &
+      Order   != "Chloroplast" &
+      Family  != "D_4__Mitochondria" 
+  )
+
+free_phyloseq <- free_phyloseq %>% subset_samples(Filter_pores == "0.2") # select only free-living
+free_phyloseq <- free_phyloseq %>% subset_samples(Station != "STN089") # exclude pine-island station
+free_phyloseq <- free_phyloseq %>% subset_samples(Location_in_polynya != "Off_Ice_Shelf") # remove off ice shelf stations
+
+## NMS ##
+set.seed(1)
+
+# set breaks
+color_breaks <- unique(sample_data(free_phyloseq)$Location_in_polynya)
+shape_breaks <- unique(sample_data(free_phyloseq)$Depth_Threshold)
+
+# Figure 1
+## NMS ORDINATION ##
+free_nmds <- ordinate(
+  physeq = free_phyloseq, 
+  method = "NMDS", 
+  distance = "bray"
+)
+
+## PLOT NMS ##
+cols <- c("#960E10", "#57B2C7", "#476C37", "#293021") # set colors for plot
+
+# use ordination to plot NMS
+my_plot <- plot_ordination(
+  physeq = free_phyloseq,
+  ordination = free_nmds,
+  color = "Location_in_polynya",
+  shape = "Depth_Threshold",
+  title = "NMS of ASP Free-Living Bacterial Communities"
+  ) +
+  scale_color_manual(values = cols,
+                     name = "Location_in_polynya",
+                     breaks = color_breaks,
+                     labels = color_breaks
+                     ) +
+  scale_shape_manual(values = c(17, 16, 8),
+                     name = "Depth_Threshold",
+                     breaks = shape_breaks,
+                     labels = shape_breaks)+
+  geom_point(aes(color = Location_in_polynya), alpha = 0.8, size = 3) +
+  annotate("text", x = -1.6, y = -1.7, label ="2D Stress: 0.11")
+
+my_plot + theme(legend.position = "bottom") + 
+  theme_bw() + theme(panel.grid.major = element_blank(), 
+                     panel.grid.minor = element_blank(), 
+                     axis.line = element_line(colour = "black")) # takes away grid from ggplot + adds black axis line
+
+ggsave("bartlett-NMS.pdf", width = 6, height = 4, dpi = 150) # save plot
+
+
+## MORE TESTS + POST HOC ##
+free_bray <- phyloseq::distance(free_phyloseq, method = "bray") # setting distance
+sampledf <- data.frame(sample_data(free_phyloseq))# make a data frame from the sample_data
+
+#select from main data frame
+adonis_frame <- select(sampledf, Station, Salinity:CTD_Depth, Filter_pores, Depth_Threshold:Sample.Control)
+adonis_frame$Depth_Threshold <- as.factor(adonis_frame$Depth_Threshold)
+adonis_frame$Station <- as.factor(adonis_frame$Station)
+adonis_frame$Location_in_polynya <- as.factor(adonis_frame$Location_in_polynya)
+
+# Adonis test
+adonis <- adonis2(free_bray ~ Depth_Threshold * Location_in_polynya, data = adonis_frame)
+
+# Post hoc for location in polynya
+beta_location <- betadisper(free_bray, adonis_frame$Location_in_polynya)
+permutest(beta_location)
+plot(beta_location)
+boxplot(beta_location)
+mod.HSD <- TukeyHSD(beta_location)
+mod.HSD
+plot(mod.HSD, las=1)
+
+# Post hoc for depth
+beta_depth <- betadisper(free_bray, adonis_frame$Depth_Threshold)
+permutest(beta_depth)
+plot(beta_depth)
+boxplot(beta_depth)
+mod.HSD <- TukeyHSD(beta_depth)
+mod.HSD
+plot(mod.HSD, las=1)

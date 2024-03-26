@@ -1,0 +1,67 @@
+# load libraries
+install.packages("indicspecies") 
+library(indicspecies)
+
+# indicator analysis from:
+# > https://sites.ualberta.ca/~ahamann/teaching/renr690/labs/Lab9h.pdf
+
+##### formatting dataset for indicator analysis #####
+## OTU table has sites as rows and species in columns. ##
+
+### change TAX ID to actual genus
+#transposed otu table
+
+metadata <- read.delim("/Users/sierra/Documents/Research/Ordination analysis R scripts/artemis-eDNA-metadata-final.tsv", sep="\t", header=TRUE) #read in metadata
+head(metadata) # check
+
+ps@otu_table <- t(ps@otu_table)
+
+# generate a vector containing the full taxonomy path for all OTUs
+wholetax <- do.call(paste, c(as.data.frame(tax_table(ps))
+                             [c("Genus", "Species")], 
+                             sep = "__"))  # to distinguish from "_" within tax ranks
+
+ps_family <- tax_glom(ps, "Genus")
+otu_family <- otu_table(ps_family)
+# otu_family <- t(otu_family) # transpose OTU table
+df_family <- as.data.frame(otu_family)
+
+head(tax_table(ps_family))
+identical(colnames(df_family), taxa_names(ps_family))
+
+colnames(df_family) <- as.data.frame(tax_table(ps_family))$Genus
+df_family[1:10, 1:6]
+
+write.csv(df_family, "depth_indicator_templete.csv", row.names=FALSE) #rename based on indicator
+# went into excel and added depth thresholds, organized by sampleID --> named to "indicator_(grouping)_(taxonomy).csv"
+
+##### indicator anaylsis #####
+data <- read.table("indicator_depth_genus.csv", sep=",", header=TRUE) #read in csv based on depth + genus
+groups = c(rep(1,71), rep(2,128), rep(3,52)) # group 1 = bottom, group 2 = intermediate, group 3 = surface
+groups
+
+data.frame(colnames(data))
+matrix = data[ , 3:456]
+
+indval = multipatt(matrix, groups, duleg = TRUE, control = how(nperm = 999))
+
+mattpattsummary <- summary(indval, indvalcomp = TRUE)
+
+write.csv(mattpattsummary, "mattpattsummary.csv", row.names=FALSE) 
+
+summary(indval, indvalcomp = TRUE)
+
+indicator_output = capture.output(summary(indval, indvalcomp = TRUE))
+write.table(indicator_output,file="indiciator_values_genus_depth.txt",row.names=F,quote=F)
+
+# paste wholetax and OTU_ids together
+for(i in 1:length(tmp)){
+  names(tmp)[i] = paste(wholetax[i], sep = "__")
+}
+
+##
+# monkey code from https://github.com/joey711/phyloseq/issues/1212
+
+# from https://cran.r-project.org/web/packages/indicspecies/vignettes/IndicatorSpeciesAnalysis.html
+### from https://sites.ualberta.ca/~ahamann/teaching/renr690/labs/Lab9h.pdf 
+

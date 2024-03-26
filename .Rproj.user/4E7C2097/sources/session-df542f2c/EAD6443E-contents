@@ -1,0 +1,218 @@
+# install packages
+###
+# install qiime2R
+#if (!requireNamespace("devtools", quietly = TRUE)){install.packages("devtools")}
+#devtools::install_github("jbisanz/qiime2R")
+###
+#install phyloseq with bioconductor
+#if (!require("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+#BiocManager::install(version = "3.17")
+###
+#install bioconductor
+#source('http://bioconductor.org/biocLite.R')
+#biocLite('phyloseq')
+###
+
+# load packages
+library("phyloseq")
+library("qiime2R")
+library("ggplot2")
+library("tidyr")
+library("dplyr")
+
+# importing feature table into phyloseq
+phyloseq<-qza_to_phyloseq(features="table.qza")
+
+# importing metadata
+metatable <- read.delim("artemis-eDNA-metadata-final.tsv", sep="\t", header=TRUE)
+row.names(metatable) <- metatable[["X.SampleID"]]
+detach("package:dplyr", unload=TRUE)
+library("dplyr")
+metatable <- metatable %>% select(X.SampleID, everything())
+#convert to phyloseq object
+META<- sample_data(metatable)
+
+#importing taxonomy
+taxonomy <- read.delim("taxonomy.tsv", sep="\t", header=TRUE)
+names(taxonomy) <- c("row", "tax", "Confidence")
+row.names(taxonomy) <-taxonomy[[1]]
+taxonomy <- taxonomy[,(-1)]
+
+#SILVA taxonomy is in one column, separate to be able to work with different taxonomic levels:
+taxonomy <-  separate(taxonomy, tax, c("D0","D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "D14"), sep = ";", fill = "right")
+#Keep the first 8 taxonomic levels (no assignments afetr that)
+taxonomy <- taxonomy[,c(1:8)]
+taxmat <- as.matrix(taxonomy)
+#covert taxonomy table to phyloseq object
+TAX = tax_table(taxmat)
+
+# import rooted tree
+tree<-qza_to_phyloseq(tree="rooted-tree.qza")
+
+# merge all imported objects into phyloseq
+ps = merge_phyloseq(phyloseq, TAX, META, tree)
+
+
+####### Maggi Brisbin Qiime --> phyloseq tutorial #########
+# Prevelance plot
+prevdf = apply(X = otu_table(ps),
+               MARGIN = ifelse(taxa_are_rows(ps), yes = 1, no = 2),
+               FUN = function(x){sum(x > 0)})
+
+prevdf = data.frame(Prevalence = prevdf,
+                    TotalAbundance = taxa_sums(ps),
+                    tax_table(ps))
+
+prevplot1<-ggplot(prevdf, aes(TotalAbundance, Prevalence / nsamples(ps),color=D1)) +
+  geom_hline(yintercept = 0.05, alpha = 0.5, linetype = 2) +  geom_point(size = 2, alpha = 0.7) +
+  theme_bw()+
+  scale_x_log10() +  xlab("Total Abundance") + ylab("Prevalence [Frac. Samples]") +
+  facet_wrap(~D1) + theme(legend.position="none")
+
+prevplot1
+
+metatable[metatable == "Getz_Ice_shelf"] <- "Getz_Ice_Shelf"
+metatable[metatable == "Off_Ice_shelf"] <- "Off_Ice_Shelf"
+
+----
+
+highPrev <- c("D_1__Actinobacteriota", "D_1__Acidobacteriota", "D_1__AncK6", "D_1__Bacteroidota", "D_1__Bdellovibrionota", "D_1__Campilobacterota", "D_1__Chloroflexi", "D_1__Crenarchaeota", "D_1__Desulfobacterota", "D_1__Fibrobacterota", "D_1__Firmicutes", "D_1__Gemmatimonadota", "D_1__Halobacterota", "D_1__Marinimicrobia (SAR406 clade)", "D_1__Myxococcota", "D_1__NB1-j", "D_1__Nitrospinota", "D_1__PAUC34f", "D_1__Planctomycetota", "D_1__Proteobacteria", "D_1__SAR324 clade(Marine group B)", "D_1__Thermoplasmatota", "D_1__Verrucomicrobiota")
+psNHighPrev<- subset_taxa(ps, D1 %in% highPrev)
+
+physeqPra<- transform_sample_counts(psNHighPrev, function(OTU) 100* OTU/sum(OTU))
+glomD1 <- tax_glom(physeqPra, "D1")
+
+psFieldRS<- subset_samples(physeqPra, watertype == "CDW" | Location_in_polynya == "Dotson_Ice_Shelf" | Depth_Threshold =="Bottom_water")
+
+newcolors= c("#332288", "#88CCEE", "#44AA99", "#FFCC00", "#CC3311", "#CC6677", "#FFCCCC", "#999933", "#DDCC77",
+             "#EE3377", "#882255", "#AA4499", "#BBCCEE", "#222255", "#CCEEFF", "#DDAA33", "#8A7C64", "#599861", "323091", "#eb4034", "#a87672", "#727ca8", "#b84bd6", "#a5d64b", "#b5bda8", "#69d6cb", "#928dc4")
+
+metaFieldRS <- metatable[metatable$Depth_Threshold =="Bottom_water" | metatable$watertype == "CDW" | metatable$Location_in_polynya == "Dotson_Ice_Shelf", ]
+
+metaFieldRS$Depth_Threshold <- factor(metaFieldRS$Depth_Threshold)
+metaFieldRS$watertype <- factor(metaFieldRS$watertype)
+metaFieldRS$Location_in_polynya <- factor(metaFieldRS$Location_in_polynya)
+
+METArs<- sample_data(metaFieldRS)
+sample_data(psFieldRS) <- METArs
+
+taxabarplotD1<-plot_bar(psFieldRS, x= "Depth_Threshold", fill = "D1", facet_grid= ~watertype) +  
+  scale_y_continuous(expand = c(0, 0)) + ggtitle("") + 
+  scale_fill_manual(values=newcolors ) + 
+  theme(legend.title=element_blank()) + 
+  geom_bar(aes(fill=D1), stat="identity", position="stack", width =0.9) +
+  theme_classic() + theme(text = element_text(size=14))+
+  theme(axis.text.x = element_text(angle = 90)) + 
+  xlab("Sample") +ylab("Relative Abundance(%)") + 
+  facet_grid(~Location_in_polynya,scales="free") + theme(text = element_text(size=14))
+
+taxabarplotD1 + theme(legend.position="left")
+
+# Summary Stats
+OTUs <- data.frame(otu_table(ps))
+OTUsRS<- OTUs
+OTUsRS$RowSum <- rowSums(OTUsRS)
+OTUsRSnoZero <- OTUsRS$RowSum!=0
+sum(OTUsRSnoZero) #4692
+
+OTUs0 <- OTUs!=0 #is this number not a zero? true (1) or false (0)
+csums <- colSums(OTUs0) # col sums = observed ASV richness
+csumdf <- as.data.frame(csums)
+max(csumdf$csums) #680
+min(csumdf$csums) #04
+mean(csumdf$csums) #242.14
+
+####### From Richert phyloseq stuff ########
+#relative abundance plot
+TopNOTUs <- names(sort(taxa_sums(phy_16S_prune_soil), TRUE)[1:40])
+ent40 <- prune_taxa(TopNOTUs, phy_16S_prune_soil)
+
+###removing NA/kitblank from samples###
+
+#First, create a list of the samples that you want to remove
+Samples_toRemove <- "NA"
+
+#To see what samples get removed, run the following; note, I have a column called "SampleID"
+subset_samples(phy_16S_prune_soil, "NA" %in% Station)
+#This will return a ps object that contains the samples you want to remove
+subset_samples(phy_16S_prune_soil, "Bottom_water" %in% Depth_Threshold)
+phys_TopNOTUs <- names(sort(taxa_sums(phy_16S_prune_soil), TRUE)[1:40])
+phys_ent40 <- prune_taxa(phys_TopNOTUs, phy_16S_prune_soil)
+
+#To remove those from your phyloseq object
+subset_samples(phy_16S_prune_soil[[sample_data()]], !(Station %in% Samples_toRemove))
+#This will return a ps object with the samples removed
+
+my_plot_bar = function (physeq, x = "Sample", y = "Abundance", fill = NULL, title = NULL, 
+                        facet_grid = NULL) {
+  mdf = psmelt(physeq)
+  p = ggplot(mdf, aes_string(x = x, y = y, fill = fill))
+  p = p + geom_bar(stat = "identity", position = "stack")
+  p = p + theme(axis.text.x = element_text(angle = -90, hjust = 0))
+  if (!is.null(facet_grid)) {
+    p <- p + facet_grid(facet_grid)
+  }
+  if (!is.null(title)) {
+    p <- p + ggtitle(title)
+  }
+  return(p)
+}
+
+# only bacteria, only deep (to do next)
+#facet wrap by watertype/flow of CDW
+
+p2 = my_plot_bar(phys_ent40, "Flow_of_CDW", fill="Family")
+p2
+
+ggplot(prevdf, aes(Prevalence)) + geom_histogram(bins = 50) + theme_bw() + 
+  ggtitle("Histogram of Taxa Prevalence")
+
+########## jung julie metagenomic pipeline ########
+# Create a new data frame of the sorted row sums, a column of sorted values from 1 to the total number of individuals/counts for each ASV and a categorical variable stating these are all ASVs.
+readsumsdf <- data.frame(nreads = sort(taxa_sums(ps), decreasing = TRUE), 
+                         sorted = 1:ntaxa(ps),
+                         type = "ASVs")
+# Make a data frame with a column for the read counts of each sample for histogram production
+sample_sum_df <- data.frame(sum = sample_sums(ps))
+# Make plots
+# Generates a bar plot with # of reads (y-axis) for each taxa. Sorted from most to least abundant
+# Generates a second bar plot with # of reads (y-axis) per sample. Sorted from most to least
+p.reads = ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
+  geom_bar(stat = "identity") +
+  ggtitle("ASV Assessment") +
+  scale_y_log10() +
+  facet_wrap(~type, scales = "free") +
+  ylab("# of Sequences")
+# Histogram of the number of Samples (y-axis) at various read depths
+p.reads.hist <- ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "firebrick3", binwidth = 150) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  ylab("# of Samples")
+# Final plot, side-by-side
+grid.arrange(p.reads, p.reads.hist, ncol = 2)
+# Basic summary statistics
+summary(sample_sums(ps))
+
+# Format a data table to combine sample summary data with sample variable data
+ss <- sample_sums(ps)
+sd <- as.data.frame(sample_data(ps))
+ss.df <- merge(sd, data.frame("ASV" = ss), by ="row.names")
+
+# Plot the data by the treatment variable
+y = 1000 # Set a threshold for the minimum number of acceptable reads. Can start as a guess
+x = "Station" # Set the x-axis variable you want to examine
+label = "Station" # This is the label you want to overlay on the points
+
+p.ss.boxplot <- ggplot(ss.df, aes_string(x, y = "ASV", color = "Station")) + 
+  geom_boxplot(outlier.colour="NA", position = position_dodge(width = 0.8)) +
+  geom_jitter(size = 2, alpha = 0.6) +
+  scale_y_log10() +
+  #facet_wrap(~SampleName) +
+  geom_hline(yintercept = y, lty = 2) +
+  geom_text(aes_string(label = label), size = 3, nudge_y = 0.05, nudge_x = 0.05)
+p.ss.boxplot
+
+plot_tree(phy_16S, "treeonly")
+plot_tree(phy_16S, nodelabf=nodeplotboot(), ladderize="left", color="Depth")

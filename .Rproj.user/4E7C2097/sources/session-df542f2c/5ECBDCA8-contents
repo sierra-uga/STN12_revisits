@@ -1,0 +1,377 @@
+#library("BiocManager")
+#BiocManager::install("microbiome")
+
+# load packages
+library("phyloseq")
+library("qiime2R")
+library("ggplot2")
+library("tidyr")
+library("dplyr")
+
+# importing feature table into phyloseq
+phyloseq<-qza_to_phyloseq(features="table.qza")
+
+# importing metadata
+metatable <- read.delim("artemis-eDNA-metadata-final.tsv", sep="\t", header=TRUE)
+row.names(metatable) <- metatable[["X.SampleID"]]
+detach("package:dplyr", unload=TRUE)
+library("dplyr")
+metatable <- metatable %>% select(X.SampleID, everything())
+#convert to phyloseq object
+META<- sample_data(metatable)
+
+#importing taxonomy
+taxonomy <- read.delim("taxonomy.tsv", sep="\t", header=TRUE)
+names(taxonomy) <- c("row", "tax", "Confidence")
+row.names(taxonomy) <-taxonomy[[1]]
+taxonomy <- taxonomy[,(-1)]
+
+#SILVA taxonomy is in one column, separate to be able to work with different taxonomic levels:
+taxonomy <-  separate(taxonomy, tax, c("Kingdom","Phylum", "Class", "Order", "Family", "Genus", "Species", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "D14"), sep = ";", fill = "right")
+#Keep the first 8 taxonomic levels (no assignments afetr that)
+taxonomy <- taxonomy[,c(1:8)]
+taxmat <- as.matrix(taxonomy)
+#covert taxonomy table to phyloseq object
+TAX = tax_table(taxmat)
+
+# import rooted tree
+tree<-qza_to_phyloseq(tree="rooted-tree.qza")
+
+# merge all imported objects into phyloseq
+phy_16S = merge_phyloseq(phyloseq, TAX, META, tree)
+
+######### TIAGO's CODE. #########
+#Visualize some data entries from the phyloseq object
+sample_names(phy_16S) # list sample names
+rank_names(phy_16S) # list the taxonomic ranks from your tax_table
+sample_variables(phy_16S) # list the variables from your sample_data
+
+# Check if there are samples with zero reads and remove them
+smin <- min(sample_sums(phy_16S)) # smin = 0 means (see values on Global environment) you have samples with no reads. Originally sample number was 624.
+phy_16S_prune <- prune_samples(sample_sums(phy_16S)>0, phy_16S)
+smin <- min(sample_sums(phy_16S_prune)) # smin = 2
+phy_16S_prune # 4692 taxa and 279 samples. We removed 1 sample.
+
+# Check for ASVs that have no counted reads.
+any(taxa_sums(phy_16S_prune) == 0) # if TRUE, there are ASVs with no reads, otherwise FALSE
+sum(taxa_sums(phy_16S_prune) == 0) # gives the number of cases
+
+# Inspect Library sizes. This gives you an idea of how many reads per sample/sample type.
+df_phy_16S_prune <- as.data.frame(sample_data(phy_16S_prune)) # transform sample_data/mapping file from phyloseq object to a dataframe
+df_phy_16S_prune$LibrarySize <- sample_sums(phy_16S_prune) # create another variable LibrarySize on the sample_data by summing the read count across all ASVs per sample
+df_phy_16S_prune <- df_phy_16S_prune[order(df_phy_16S_prune$LibrarySize),] # reorder sample_data by library size
+df_phy_16S_prune$Index <- seq(nrow(df_phy_16S_prune)) # create another variable Index by using the row number of the dataframe
+
+# Plot library sizes using ggplot
+# This plot shows the number of reads per sample type (e.g., real samples, controls, blanks, etc.)
+# It also gives an idea of potential outliers in the dataset.
+ggplot(data = df_phy_16S_prune, aes(x= Index, y= LibrarySize, color = Sample.Control)) +
+  geom_point()
+
+####################################### Only durapore samples #######################################
+# Since the dataset has multiple filter types, we will work with them separately.
+# Here we subset our pruned phyloseq object to keep only samples from durapores.
+# Our mapping file has a variable called Experiment with two entries, "Microbiome" for 16S reads from nematodes and "Environment" for 16S reads from soil samples. 
+phy_16S_prune_soil <- subset_samples(phy_16S_prune, Filter_pores == "0.2") # select only free-living
+phy_16S_prune_soil # 4692  This represents only the soil dataset and its respective controls/blanks
+
+# We can check if we have only soil samples, by exploring the sample_data
+unique(sample_data(phy_16S_prune_soil)$Filter_pores) # shows only Environment with represents soil samples
+
+# Check/remove samples with zero reads if necessary.
+# We already remove samples with 0 reads, so these commands have no effect
+smin <- min(sample_sums(phy_16S_prune_soil)) #smin = 79
+phy_16S_prune_soil <- prune_samples(sample_sums(phy_16S_prune_soil)>0, phy_16S_prune_soil)
+smin <- min(sample_sums(phy_16S_prune_soil)) #smin = 79
+phy_16S_prune_soil # 2387 taxa and 159 samples, same as previous object since there was no more samples with zero counts.
+
+# Check for ASVs that have zero reads
+# We do have many ASVs with count = 0 since we exclude many samples from the nematode microbiome dataset
+any(taxa_sums(phy_16S_prune_soil) == 0) # if TRUE, there are ASVs with zero reads, otherwise FALSE
+sum(taxa_sums(phy_16S_prune_soil) == 0) # gives the number of cases. Since we select only soil samples, there are lot of ASVs with zero count.
+
+# So, here we prune ASVs with zero counts
+phy_16S_prune_soil <-prune_taxa(taxa_sums(phy_16S_prune_soil) > 0, phy_16S_prune_soil) # prune taxa/ASVs with zero reads
+phy_16S_prune_soil # 2387 taxa and 159 samples (before was 12818 taxa)
+head(sample_data(phy_16S_prune_soil)) # list 6 first rows from sample_data
+head(otu_table(phy_16S_prune_soil)) # list 6 first rows from otu_table
+
+# Inspect Library sizes of soil samples only
+df_phy_16S_prune_soil <- as.data.frame(sample_data(phy_16S_prune_soil))
+df_phy_16S_prune_soil$LibrarySize <- sample_sums(phy_16S_prune_soil)
+df_phy_16S_prune_soil <- df_phy_16S_prune_soil[order(df_phy_16S_prune_soil$LibrarySize),]
+df_phy_16S_prune_soil$Index <- seq(nrow(df_phy_16S_prune_soil))
+
+# Plot using ggplot for soil samples, all sample types
+# Overall, soil blank samples also head a high number of reads, not so the negative control
+# Positive controls had a high number of reads as expected
+ggplot(data = df_phy_16S_prune_soil, aes(x= Index, y= LibrarySize, color = Sample.Control)) +
+  geom_point()
+
+# Inspect control samples in the bi-dimensional space.
+# NMDS ordination of all soil samples, including controls & blanks.
+# This can give us an idea of potential contaminants may affect our dataset
+phy_16S_prune_soil_clr <- microbiome::transform(phy_16S_prune_soil, "clr") # Apply centered log ration transformation due to the variability of the data
+phy_16S_prune_soil_hel <- microbiome::transform(phy_16S_prune_soil, "hellinger") # Apply hellinger transformation, which standardize samples by totals and takes the sqrt.
+
+# NMDS using clr transformation with all samples
+set.seed(1)
+phy_16S_prune_soil_clr_nmds <- ordinate(
+  physeq = phy_16S_prune_soil_clr, 
+  method = "NMDS", 
+  distance = "euclidean" # use euclidean distance instead of bray-curtis since the data is clr transformed (i.e., negative values)
+)
+
+# NMDS using Hellinger transformation with all samples
+set.seed(1)
+phy_16S_prune_soil_hel_nmds <- ordinate(
+  physeq = phy_16S_prune_soil_hel, 
+  method = "NMDS", 
+  distance = "bray" # use bray-curtis distance
+)
+
+#unique station names = scale color
+color_breaks <- unique(sample_data(phy_16S_prune_soil)$Station)
+shape_breaks <- unique(sample_data(phy_16S_prune_soil)$Location_in_polynya)
+
+#had to edit to exlude shape, because code was not working.
+theme_set(theme_bw())
+phyloseq::plot_ordination(
+  physeq = phy_16S_prune_soil_clr,
+  ordination = phy_16S_prune_soil_clr_nmds,
+  type = "samples",
+  color = "Station", 
+  shape = "Location_in_polynya")+
+  scale_color_manual(values = c("#52392F", "#83643E","#C29B6C", 
+                                "#397A4C", "#77C063", "#BEDB92", "blue", "orange", "purple", "red", "dodgerblue", "green", "yellow", "#432352", "#102343", "#123910", "#495341", "#532134", "#355544", "#123212"),
+                     name = "Station",
+                     breaks = color_breaks,
+                     labels = color_breaks)+
+  scale_shape_manual(values = c(1:8),
+                     name = "Location_in_polynya",
+                     breaks = shape_breaks,
+                     labels = shape_breaks)+
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  geom_point(aes(color = Station), alpha = 0.7, size = 4) +
+  #ggrepel::geom_text_repel(aes(label = Sample.Site, color = Habitat), size = 2, max.overlaps = 30) +
+  #geom_point(colour = "grey90", size = 1.5) +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  #guides(fill = guide_legend(title = "Sample Site", reverse = FALSE, keywidth = 1, keyheight = 1)) + # Plot the legend
+  theme(legend.title = element_text(face = "bold", size =12), legend.title.align = 0.5) + # # adjusts the title of the legend
+  #ylab("NMDS2") + # add the title on y axis
+  #xlab("NMDS1") + # add the title on x axis
+  #ggtitle("Shipley Skinner bacterial Communities - ASV level") + # add the title on graphic
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size =14)) +
+  theme(strip.background =element_blank()) + # remove the background of titles
+  #annotate("text", x = -0.50, y = 0.51, label = "B", size = 9, fontface = 2) +
+  annotate("text", x = 55, y = 45, label ="2D Stress: 0.18")
+ggsave("phy_16S_prune_soil_clr_nmds_no-filtering.pdf", width = 7, height = 5, dpi = 200)
+
+# nMDS plot (Hellinger transformation) with all samples including blanks and controls.
+# Very divergent negative control sample obscure the grouping of samples
+# Also, the stress value of the nMDS is extremely low, suggesting insufficient data.
+theme_set(theme_bw())
+phyloseq::plot_ordination(
+  physeq = phy_16S_prune_soil_hel,
+  ordination = phy_16S_prune_soil_hel_nmds,
+  type = "samples",
+  shape = "Location_in_polynya",
+  color = "Station") +
+  scale_color_manual(values = c("#52392F", "#83643E","#C29B6C", 
+                                "#397A4C", "#77C063", "#BEDB92", "blue", "orange", "purple", "red", "dodgerblue", "green", "yellow", "#432352", "#102343", "#123910", "#495341", "#532134", "#355544", "#123212"),
+                     name = "Station",
+                     breaks = color_breaks,
+                     labels = color_breaks)+
+  scale_shape_manual(values = c(1:8),
+                     name = "Location_in_polynya",
+                     breaks = shape_breaks,
+                     labels = shape_breaks)+
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  geom_point(aes(color = Station), alpha = 0.7, size = 4) +
+  #ggrepel::geom_text_repel(aes(label = Sample.Site, color = Habitat), size = 2, max.overlaps = 30) +
+  #geom_point(colour = "grey90", size = 1.5) +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  #guides(fill = guide_legend(title = "Sample Site", reverse = FALSE, keywidth = 1, keyheight = 1)) + # Plot the legend
+  theme(legend.title = element_text(face = "bold", size =12), legend.title.align = 0.5) + # # adjusts the title of the legend
+  #ylab("NMDS2") + # add the title on y axis
+  #xlab("NMDS1") + # add the title on x axis
+  #ggtitle("Shipley Skinner bacterial Communities - ASV level") + # add the title on graphic
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size =14)) +
+  theme(strip.background =element_blank()) + # remove the background of titles
+  #annotate("text", x = -0.50, y = 0.51, label = "B", size = 9, fontface = 2) +
+  annotate("text", x = 55, y = 45, label ="2D Stress: 0.18")
+
+
+## skipped to line 469
+
+# Now we will filter out Chloroplasts and Mitochondria from the data matrix.
+phy_16_prune_soil_noncontam_prev05_true_filt <- phy_16S_prune_soil %>%
+  subset_taxa(
+    Family  != "Mitochondria" &
+      Order   != "Chloroplast"
+  )
+phy_16_prune_soil_noncontam_prev05_true_filt 
+
+any(taxa_sums(phy_16_prune_soil_noncontam_prev05_true_filt) == 0) # if TRUE, there are ASVs with no reads, otherwise FALSE
+sum(taxa_sums(phy_16_prune_soil_noncontam_prev05_true_filt) == 0) # gives the number of cases
+smin <-min(sample_sums(phy_16_prune_soil_noncontam_prev05_true_filt)) # smin = 79
+phy_16_prune_soil_noncontam_prev05_true_filt
+
+phy_16_prune_soil_noncontam_prev05_true_filt_log10 <- microbiome::transform(phy_16_prune_soil_noncontam_prev05_true_filt, "log10p")
+set.seed(1)
+phy_16_prune_soil_noncontam_prev05_true_filt_log10_nmds <- ordinate(
+  physeq = phy_16_prune_soil_noncontam_prev05_true_filt_log10, 
+  method = "NMDS", 
+  distance = "bray"
+) # Stress: 0.07083906
+
+theme_set(theme_bw())
+phyloseq::plot_ordination(
+  physeq = phy_16_prune_soil_noncontam_prev05_true_filt_log10,
+  ordination = phy_16_prune_soil_noncontam_prev05_true_filt_log10_nmds,
+  type = "samples",
+  shape = "Location_in_polynya",
+  color = "Depth_Threshold") +
+  scale_color_manual(values = c("#52392F", "#83643E","#C29B6C", 
+                                "#397A4C", "#77C063", "#BEDB92", "blue", "orange", "purple", "red", "dodgerblue", "green", "yellow", "#432352", "#102343", "#123910", "#495341", "#532134", "#355544", "#123212"),
+                     name = "Depth_Threshold",
+                     breaks = color_breaks,
+                     labels = color_breaks)+
+  scale_shape_manual(values = c(1:8),
+                     name = "Location_in_polynya",
+                     breaks = shape_breaks,
+                     labels = shape_breaks)+
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  geom_point(aes(color = Depth_Threshold), alpha = 0.7, size = 4) +
+  #ggrepel::geom_text_repel(aes(label = Sample.Site, color = Habitat), size = 2, max.overlaps = 30) +
+  #geom_point(colour = "grey90", size = 1.5) +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  #guides(fill = guide_legend(title = "Sample Site", reverse = FALSE, keywidth = 1, keyheight = 1)) + # Plot the legend
+  theme(legend.title = element_text(face = "bold", size =12), legend.title.align = 0.5) + # # adjusts the title of the legend
+  #ylab("NMDS2") + # add the title on y axis
+  #xlab("NMDS1") + # add the title on x axis
+  #ggtitle("Shipley Skinner bacterial Communities - ASV level") + # add the title on graphic
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size =14)) +
+  theme(strip.background =element_blank()) + # remove the background of titles
+  #annotate("text", x = -0.50, y = 0.51, label = "B", size = 9, fontface = 2) +
+  annotate("text", x = -1, y = 2, label ="2D Stress: 0.07")
+ggsave("results/soil/phy_16_prune_soil_noncontam_prev05_true_filt_log10_nmds.pdf", width = 6, height = 4, dpi = 200)
+
+
+############### Ordination using PCA and clr transformed phyloseq objects
+phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca <- phyloseq::ordinate(
+  physeq = phy_16_prune_soil_noncontam_prev05_true_filt_log10,
+  method = "RDA",
+  distance = "euclidean"
+)
+
+# Plot scree plot to see PCA contributions
+phyloseq::plot_scree(phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca) + 
+  geom_bar(stat="identity", fill = "blue") +
+  labs(x = "\nAxis", y = "Proportion of Variance\n")
+
+head(phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca$CA$eig)
+sapply(phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca$CA$eig[1:5], function(x) x / sum(phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca$CA$eig))
+
+# Scale axes and plot ordination
+phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca_clr1 <- phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca$CA$eig[1] / sum(phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca$CA$eig)
+phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca_clr2 <- phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca$CA$eig[2] / sum(phy_16_prune_soil_noncontam_prev05_true_filt_scale_clr_pca$CA$eig)
+
+
+##### watertype + Flow_of_CDW
+color_breaks <- unique(sample_data(phy_16S_prune_soil)$watertype)
+shape_breaks <- unique(sample_data(phy_16S_prune_soil)$Flow_of_CDW)
+
+
+theme_set(theme_bw())
+phyloseq::plot_ordination(
+  physeq = phy_16S_prune_soil_clr,
+  ordination = phy_16S_prune_soil_clr_nmds,
+  type = "samples",
+  color = "watertype", 
+  shape = "Flow_of_CDW")+
+  scale_color_manual(values = c("red", "blue", "orange", "green"),
+                     name = "watertype",
+                     breaks = color_breaks,
+                     labels = color_breaks)+
+  scale_shape_manual(values = c(2, 16, 4, 1),
+                     name = "Flow_of_CDW",
+                     breaks = shape_breaks,
+                     labels = shape_breaks)+
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  geom_point(aes(color = watertype), alpha = 0.7, size = 4) +
+  #ggrepel::geom_text_repel(aes(label = Sample.Site, color = Habitat), size = 2, max.overlaps = 30) +
+  #geom_point(colour = "grey90", size = 1.5) +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 1, size = 9)) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  #guides(fill = guide_legend(title = "Sample Site", reverse = FALSE, keywidth = 1, keyheight = 1)) + # Plot the legend
+  theme(legend.title = element_text(face = "bold", size =12), legend.title.align = 0.5) + # # adjusts the title of the legend
+  #ylab("NMDS2") + # add the title on y axis
+  #xlab("NMDS1") + # add the title on x axis
+  #ggtitle("Shipley Skinner bacterial Communities - ASV level") + # add the title on graphic
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size =14)) +
+  theme(strip.background =element_blank()) + # remove the background of titles
+  #annotate("text", x = -0.50, y = 0.51, label = "B", size = 9, fontface = 2) +
+  annotate("text", x = 55, y = 45, label ="2D Stress: 0.112")
+
+
+###abundance skipped to line 1620
+
+ggplot(taxonomy, aes(x = META$Station, y = Abundance, fill = Phylum)) +
+  geom_bar(stat = "identity", width = 0.95) + # adds to 100%
+  geom_text(aes(label = ifelse(round(Abundance*100) >= 5, paste(round(Abundance*100, digits = 0), "%"), "")), size = 3, position = position_stack(vjust = 0.5)) +
+  scale_fill_manual(values = color_breaks) +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1, size = 10, face = "bold")) + # adjusts text of y axis
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10, face = "bold")) + # adjusts text of x axis
+  theme(axis.title.y = element_text(face = "bold", size = 12)) +  # adjusts the title of y axis
+  theme(axis.title.x = element_text(face = "bold", size = 12)) + # adjusts the title of x axis
+  scale_y_continuous(labels=scales::percent, expand = c(0.0, 0.0)) + # plot as % and removes the internal margins
+  scale_x_discrete(
+    breaks = unique(sample_data(phy_16S_prune_soil)$Station),
+    labels = unique(sample_data(phy_16S_prune_soil)$Station),
+    expand = c(0.0, 0.0),
+    drop = TRUE) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_rect(fill = "white")) + # removes the gridlines
+  guides(fill = guide_legend(reverse = FALSE, keywidth = 1, keyheight = 1)) + # Plot the legend
+  theme(legend.title = element_text(face = "bold", size =12), legend.title.align = 0.5) + # # adjusts the title of the legend
+  ylab("Relative Abundance") + # add the title on y axis
+  xlab("Station") + # add the title on x axis
+  theme(strip.background =element_rect(
+    color = "black",
+    fill = "white",
+    linewidth = 1,
+    linetype = "solid"),
+    strip.text = element_text(
+      size = 12, color = "black", face = "bold")) # Format facet grid title
+ggsave("results/soil/phy_16_prune_soil_noncontam_prev05_true_filt_scale_top_phylum_top12_site.pdf", width = 9, height = 4, dpi = 200) # save graphic
