@@ -34,8 +34,10 @@ library("decontam")
 
 # feature table
 ASV <- qza_to_phyloseq(features="required_files/table.qza") # set ASV (feature) table for phyloseq
-# read in metadata
+# use for later
 metatable <- read.delim("required_files/artemis-eDNA-metadata-final.tsv", sep="\t", header=TRUE, row.names="sample_name") 
+metatable$is.neg <- metatable$Sample.Control == "Control.Sample" # making a boolean column to coordinate with controls (TRUE/FALSE) (for decontam package)
+metatable$Final_Qubit <- as.numeric(metatable$Final_Qubit) # make the column numeric (for decontam package)
 #metatable <- filter(metatable, Sample.Control == "True.Sample")# filter by transect
 META <- sample_data(metatable) # set metatable for phyloseq
 
@@ -67,8 +69,6 @@ ps <- subset_samples(ps, sample.illumina != "078_1040_PRE") # removed bc qubit v
 # and we are done!!!!!! but! we need to look through to make sure we dont have any contamination.
 # there is the package "decontam", which looks at the DNA concentration before PCR and the frequency+prevelance of taxa in the kitblanks
 
-metatable$is.neg <- metatable$Sample.Control == "Control.Sample" # making a boolean column to coordinate with controls (TRUE/FALSE)
-metatable$Final_Qubit <- as.numeric(metatable$Final_Qubit) # make the column numeric (otherwise won't work)
 ps_decontam <- isContaminant(ps, conc="Final_Qubit", neg="is.neg", threshold=0.5, detailed = TRUE, normalize = TRUE, method="combined") #decontam, using phyloseq object (ps), setting method to "combined", that uses frequency/prev, with 0.5 threshold
 table(ps_decontam$contaminant) # it identified 133 potential contaminants
 ps_decontam_list <- tibble::rownames_to_column(ps_decontam, var = "ASV") #using tibble package, might have to install?
