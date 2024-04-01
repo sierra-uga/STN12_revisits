@@ -140,6 +140,7 @@ ggsave("graphics/part_associated_barplot.pdf", width = 8, height = 6, dpi = 150)
 #  BOTH COMMUNITIES  # 
 ######################
 
+asvdf <- as.data.frame(ASV)
 total <- rbind(data_top_part, data_top_free)
 # make combined FAKE plot to grab legend from and to put in the combine plot :^)
 legend_plot <- ggplot(total, aes(x = Station, y = Abundance, fill = Order)) +
