@@ -56,6 +56,9 @@ data_top_free <- top_free$ps_obj %>%
   filter(Abundance > 0.02) %>%  # Filter out low abundance taxa
   arrange(Order)# arrange by Order
 
+data_top_free  <- aggregate(Abundance ~ Station * watertype * Order, 
+                            data = data_top_free, FUN = sum) # combines abundance based on order, station, and water mass (watertype)
+
 # particle-associated
 data_part <- ps_part %>%
   tax_glom(taxrank = "Order") %>% # agglomerate at Order level
@@ -69,6 +72,10 @@ data_top_part <- top_part$ps_obj %>%
   psmelt() %>% # transform a phyloseq object into a data frame, otherwise graphs wont work
   filter(Abundance > 0.02) %>%   # Filter out low abundance taxa
   arrange(Order)  # arrange by Order
+
+data_top_part <- aggregate(Abundance ~ Station * watertype * Order, 
+                            data = data_top_free, FUN = sum) # combines abundance based on order, station, and water mass (watertype)
+
 
 ###################
 # Plot variables! #
@@ -105,7 +112,7 @@ barplot_free <- ggplot(data_top_free, aes(x = Station, y = Abundance, fill = Ord
   guides(fill = guide_legend(reverse = FALSE, keywidth = 1, keyheight = 1)) + # for the legend, if you want one
   #ylab("Relative Abundance (Order > 2%) \n") + # remove # if you want y-axis title
   ggtitle("Free-living (<0.2 µm)")
-ggsave("graphics/free_living_barplot.pdf", width = 8, height = 6, dpi = 150)
+ggsave("graphics/free_living_barplot.pdf", width = 8, height = 12, dpi = 150) # save as pdf
 
 ###################### 
 #  stacked barplots  #
@@ -132,7 +139,7 @@ barplot_part <- ggplot(data_top_part, aes(x = Station, y = Abundance, fill = Ord
   theme(panel.spacing.y = unit(1, "lines")) +
   guides(fill = guide_legend(reverse = FALSE, keywidth = 1, keyheight = 1)) +
   ggtitle("Particle-associated (>3 µm)")
-ggsave("graphics/part_associated_barplot.pdf", width = 8, height = 6, dpi = 150)
+ggsave("graphics/part_associated_barplot.pdf", width = 8, height = 6, dpi = 150) # save as pdf
 
 ###################### 
 #  stacked barplots  #
@@ -140,7 +147,6 @@ ggsave("graphics/part_associated_barplot.pdf", width = 8, height = 6, dpi = 150)
 #  BOTH COMMUNITIES  # 
 ######################
 
-asvdf <- as.data.frame(ASV)
 total <- rbind(data_top_part, data_top_free)
 # make combined FAKE plot to grab legend from and to put in the combine plot :^)
 legend_plot <- ggplot(total, aes(x = Station, y = Abundance, fill = Order)) +
@@ -165,4 +171,4 @@ ps_combined <- ggarrange(
 annotate_figure(ps_combined, top = text_grob("Station 12 Time Series", 
                                                     color = "black", face = "bold", size = 18))
 
-ggsave("graphics/combined_barplot.pdf", width = 13, height = 7, dpi = 150)
+ggsave("graphics/combined_barplot.pdf", width = 14, height = 10, dpi = 150)
